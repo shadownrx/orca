@@ -148,7 +148,7 @@ describe('PR comments beside changed files', () => {
       kind: 'task-source' as const,
       provider: 'github' as const,
       projectId: 'github:example/project',
-      hostId: 'runtime:remote-host',
+      hostId: 'runtime:remote-host' as const,
       repoId: 'remote-repo'
     }
     render({ ...props, repoPath: null, sourceContext })
