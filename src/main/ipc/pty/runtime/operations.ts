@@ -1,3 +1,4 @@
+import { isRemoteRuntimePtyId } from '../../../../shared/remote-runtime-pty-id'
 import type { IPtyProvider } from '../../../providers/types'
 import { LocalPtyProvider } from '../../../providers/local-pty-provider'
 import { parseAppSshPtyId } from '../../../providers/ssh-pty-id'
@@ -10,6 +11,7 @@ import type { PtyRuntimeControllerDeps } from './controller-deps'
 import {
   writeRefused,
   writeUnverifiable,
+  isSettledWrite,
   type WriteSettlement
 } from '../../../../shared/pty-write-settlement'
 import type { TerminalInputKind } from '../../../../shared/terminal-input-kind'
@@ -36,6 +38,11 @@ export function writePtyFromRuntimeController(
   inputKind: TerminalInputKind,
   options?: { waitForSettlement: true }
 ): boolean | WriteSettlement | Promise<WriteSettlement> {
+  const observeAcceptedInput = (): void => {
+    if (inputKind === 'driving' && ptyOwnership.get(ptyId) === null) {
+      deps.runtime?.observeClaudeTerminalEvidence?.(ptyId, { kind: 'input', data })
+    }
+  }
   let provider: IPtyProvider
   try {
     provider = getProviderForPty(ptyId)
@@ -50,7 +57,14 @@ export function writePtyFromRuntimeController(
     }
     deps.runtime?.terminalRunFacts?.recordInput(ptyId, inputKind, data)
     try {
-      return provider.writeWithSettlement(ptyId, data)
+      const result = provider.writeWithSettlement(ptyId, data)
+      const observe = (settlement: WriteSettlement): WriteSettlement => {
+        if (settlement.outcome === 'accepted') {
+          observeAcceptedInput()
+        }
+        return settlement
+      }
+      return isSettledWrite(result) ? observe(result) : result.then(observe)
     } catch {
       // A synchronous throw cannot prove the transport took nothing.
       return writeUnverifiable('provider_threw_after_handoff', true)
@@ -58,7 +72,11 @@ export function writePtyFromRuntimeController(
   }
   deps.runtime?.terminalRunFacts?.recordInput(ptyId, inputKind, data)
   try {
-    return provider.write(ptyId, data) !== false
+    const accepted = provider.write(ptyId, data) !== false
+    if (accepted) {
+      observeAcceptedInput()
+    }
+    return accepted
   } catch {
     return false
   }
@@ -71,7 +89,7 @@ export async function probePtyLivenessFromRuntimeController(
   try {
     // Why: no locally routed provider can authoritatively answer for a
     // remote host's PTY, so remote-scoped ids stay unknown, never absent.
-    if (ptyId.startsWith('remote:')) {
+    if (isRemoteRuntimePtyId(ptyId)) {
       return null
     }
     const connectionId = ptyOwnership.get(ptyId) ?? parseAppSshPtyId(ptyId)?.connectionId
@@ -218,7 +236,7 @@ export function hasPtyFromRuntimeController(
   try {
     // Why: no locally routed provider can authoritatively answer for a
     // remote host's PTY, so remote-scoped ids stay unknown, never absent.
-    if (ptyId.startsWith('remote:')) {
+    if (isRemoteRuntimePtyId(ptyId)) {
       return null
     }
     const connectionId = ptyOwnership.get(ptyId) ?? parseAppSshPtyId(ptyId)?.connectionId

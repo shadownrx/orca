@@ -83,8 +83,7 @@ export abstract class RelayDispatcherProducerTransport extends RelayDispatcherRp
     client: RelayClient,
     frame: PreparedRelayFrame,
     lane: 'interactive' | 'ordinary' | 'fixed-bulk' | 'bulk',
-    onSettled: (result: SinkWriteSettlement) => void = () => {},
-    isStillAdmitted?: () => boolean
+    onSettled: (result: SinkWriteSettlement) => void = () => {}
   ): boolean {
     const bytes = frame.frameBytes
     const fixedBlocked =
@@ -97,7 +96,7 @@ export abstract class RelayDispatcherProducerTransport extends RelayDispatcherRp
     if (!leases) {
       return false
     }
-    return this.enqueueLeasedFrame(client, frame, lane, leases[0], onSettled, isStillAdmitted)
+    return this.enqueueLeasedFrame(client, frame, lane, leases[0], onSettled)
   }
 
   protected publishBulkWhenAvailable(
@@ -114,31 +113,43 @@ export abstract class RelayDispatcherProducerTransport extends RelayDispatcherRp
     }
     return new Promise<void>((resolve, reject) => {
       let removeCapacityListener: (() => void) | null = null
+      let retryFinished = false
       const finish = (): void => {
+        retryFinished = true
         removeCapacityListener?.()
         removeCapacityListener = null
       }
       const tryPublish = (): void => {
-        if (this.disposed || client.closed) {
-          finish()
-          resolve()
-          return
-        }
-        if (
-          this.publishPreparedToClient(client, frame, lane, (result) => {
+        // Retiring queued PTY output can release capacity before admission returns.
+        this.runPublicationTransaction(() => {
+          if (retryFinished) {
+            return
+          }
+          if (this.disposed || client.closed) {
             finish()
-            if (result.ok || this.disposed || client.closed) {
-              resolve()
-            } else {
-              reject(result.error)
-            }
-          })
-        ) {
-          return
-        }
-        if (!removeCapacityListener) {
-          removeCapacityListener = this.onLegacyPtyCapacity(tryPublish)
-        }
+            resolve()
+            return
+          }
+          if (
+            this.publishPreparedToClient(client, frame, lane, (result) => {
+              finish()
+              if (result.ok || this.disposed || client.closed) {
+                resolve()
+              } else {
+                reject(result.error)
+              }
+            })
+          ) {
+            finish()
+            return
+          }
+          if (retryFinished) {
+            return
+          }
+          if (!removeCapacityListener) {
+            removeCapacityListener = this.onLegacyPtyCapacity(tryPublish)
+          }
+        })
       }
       tryPublish()
     })
@@ -149,21 +160,13 @@ export abstract class RelayDispatcherProducerTransport extends RelayDispatcherRp
     frame: PreparedRelayFrame,
     lane: 'interactive' | 'ordinary' | 'fixed-bulk' | 'bulk',
     lease: LegacyPublicationLease,
-    onSettled: (result: SinkWriteSettlement) => void = () => {},
-    isStillAdmitted?: () => boolean
+    onSettled: (result: SinkWriteSettlement) => void = () => {}
   ): boolean {
-    const accepted = this.enqueuePreparedFrame(
-      client,
-      frame,
-      lane,
-      (result) => {
-        lease.release()
-        onSettled(result)
-        this.notifyLegacyCapacityIfLow()
-      },
-      undefined,
-      isStillAdmitted
-    )
+    const accepted = this.enqueuePreparedFrame(client, frame, lane, (result) => {
+      lease.release()
+      onSettled(result)
+      this.notifyLegacyCapacityIfLow()
+    })
     if (!accepted) {
       lease.release()
       this.notifyLegacyCapacityIfLow()

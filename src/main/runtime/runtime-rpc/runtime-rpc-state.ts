@@ -38,7 +38,6 @@ export class RuntimeRpcState {
   protected readonly enableWebSocket: boolean
   protected readonly wsPort: number
   protected readonly preferPinnedWsPort: boolean
-  protected readonly requirePinnedWsPort: boolean
   protected readonly exposeNetworkByDefault: boolean
   protected readonly pinnedBindHost: string | null
   protected readonly webClientRoot: string | undefined
@@ -92,6 +91,8 @@ export class RuntimeRpcState {
   protected activeAskLongPolls = 0
   protected activeBrowserHostLongPolls = 0
   protected readonly activeBrowserHostLongPollsByDevice = new Map<string, number>()
+  protected clientRequestsInFlight = 0
+  protected lastClientRequestAt = Date.now()
 
   constructor({
     runtime,
@@ -101,7 +102,6 @@ export class RuntimeRpcState {
     enableWebSocket = false,
     wsPort = DEFAULT_WS_PORT,
     preferPinnedWsPort = false,
-    requirePinnedWsPort = false,
     exposeNetworkByDefault = false,
     pinnedBindHost,
     webClientRoot,
@@ -118,7 +118,6 @@ export class RuntimeRpcState {
     this.enableWebSocket = enableWebSocket
     this.wsPort = wsPort
     this.preferPinnedWsPort = preferPinnedWsPort
-    this.requirePinnedWsPort = requirePinnedWsPort
     this.exposeNetworkByDefault = exposeNetworkByDefault
     this.pinnedBindHost = pinnedBindHost ?? null
     this.webClientRoot = webClientRoot
@@ -136,5 +135,15 @@ export class RuntimeRpcState {
     this.relayRevokeOutbox = new RelayRevokeOutbox(userDataPath)
     this.pushUnregisterOutbox = new PushUnregisterOutbox(userDataPath)
     this.runtime.configureNotificationDismissalStore(userDataPath)
+  }
+
+  /** Counts a client message for idle exit, from receipt until its dispatch settles. */
+  protected trackClientRequest<T>(work: () => Promise<T>): Promise<T> {
+    this.clientRequestsInFlight += 1
+    this.lastClientRequestAt = Date.now()
+    return work().finally(() => {
+      this.clientRequestsInFlight -= 1
+      this.lastClientRequestAt = Date.now()
+    })
   }
 }

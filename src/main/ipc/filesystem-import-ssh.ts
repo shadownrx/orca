@@ -1,14 +1,12 @@
 import { lstat } from 'node:fs/promises'
 import { basename, posix, resolve } from 'node:path'
-import { authorizeExternalPath } from './filesystem-auth'
 import { isENOENT } from './filesystem-path-containment'
-import { getSshConnectionManager } from './ssh'
+import { getSshConnectionManager } from '../ssh/ssh-target-registry'
 import { requireSshFilesystemProvider } from '../providers/ssh-filesystem-dispatch'
 import type { FileUploadSession, IFilesystemProvider } from '../providers/types'
 import type { ImportItemResult } from '../../shared/filesystem-import-result-types'
 import { assertSafeRemotePathSegment, type RemotePathFlavor } from '../ssh/ssh-remote-platform'
 import { isWindowsAbsolutePathLike } from '../../shared/cross-platform-path'
-import { runSshProviderContinuation } from '../ssh/ssh-provider-continuations'
 import { remotePathExists } from './filesystem-import-ssh-remote-existence'
 import {
   captureLocalUploadRoot,
@@ -19,12 +17,6 @@ import {
 // Why: the SSH import path uses SshFilesystemProvider instead of direct SFTP so
 // system-SSH transports (ProxyCommand/ProxyJump/FIDO2) get the same workflows.
 export async function importExternalPathsSsh(
-  ...args: Parameters<typeof importExternalPathsSshTracked>
-): Promise<{ results: ImportItemResult[] }> {
-  return runSshProviderContinuation(args[2], () => importExternalPathsSshTracked(...args))
-}
-
-async function importExternalPathsSshTracked(
   sourcePaths: string[],
   destDir: string,
   connectionId: string,
@@ -104,8 +96,6 @@ async function importOneSourceSsh(
   assertCurrent?: () => void
 ): Promise<ImportItemResult> {
   const resolvedSource = resolve(sourcePath)
-
-  authorizeExternalPath(resolvedSource)
 
   const originalName = basename(resolvedSource)
   try {
